@@ -72,7 +72,7 @@ window.addEventListener("keydown",function(e){
   if(k==="escape"||k==="p")togglePause();
   if(gameState==="pause"){
     if(k==="r")startGame();
-    else if(k==="q"){gameState="title";combo=0;comboT=0;rage=0;rageActive=false;nums=[];orbs=[];hitStop=0;lvlFlash=0;}
+    else if(k==="q"){gameState="title";combo=0;comboT=0;rage=0;rageActive=false;nums=[];orbs=[];hitStop=0;lvlFlash=0;obstacles=[];hazards=[];deco=null;}
   }
   if(gameState==="title"&&(k==="enter"||k===" "))startGame();
   if(gameState==="dead"&&(k==="enter"||k===" "))startGame();
@@ -195,12 +195,98 @@ var UPGRADES=[
 
 /* ===================== LEVELS ===================== */
 var LEVELS=[
-  {name:"Outpost",tint:"#2a3a5a",unique:"charger",boss:"The Warden",bossColor:"#f6f"},
-  {name:"Foundry",tint:"#5a3a1a",unique:"splitter",boss:"Forge Tyrant",bossColor:"#fa3"},
-  {name:"Caves",tint:"#3a2a5a",unique:"spitter",boss:"Cave Crawler",bossColor:"#6f6"},
-  {name:"Void",tint:"#1a4a3a",unique:"bomber",boss:"The Devourer",bossColor:"#0f0"},
-  {name:"Core",tint:"#5a1a2a",unique:"shielder",boss:"Overlord",bossColor:"#f33"}
+  {name:"Outpost",tint:"#243049",bg:"grid",unique:"charger",boss:"The Warden",bossColor:"#f6f",haz:null,layout:{type:"crates",n:6}},
+  {name:"Foundry",tint:"#3f2a16",bg:"industrial",unique:"splitter",boss:"Forge Tyrant",bossColor:"#fa3",haz:{color:"#f73",rate:5.5,r:34,dmg:10,name:"SLAG"},layout:{type:"pillars",n:7}},
+  {name:"Caves",tint:"#2e2440",bg:"cave",unique:"spitter",boss:"Cave Crawler",bossColor:"#6f6",haz:{color:"#caa37a",rate:6.5,r:30,dmg:9,name:"ROCKFALL"},layout:{type:"rocks",n:9}},
+  {name:"Void",tint:"#123129",bg:"void",unique:"bomber",boss:"The Devourer",bossColor:"#0f0",haz:{color:"#8ff",rate:5,r:30,dmg:8,name:"RIFT"},layout:{type:"isles",n:8}},
+  {name:"Core",tint:"#3f1422",bg:"core",unique:"shielder",boss:"Overlord",bossColor:"#f33",haz:{color:"#f55",rate:4.5,r:28,dmg:12,name:"LASER"},layout:{type:"reactor",n:8}}
 ];
+
+/* ===================== LEVEL DESIGN (arenas / hazards / bg) ===================== */
+function resolveCircle(x,y,r){
+  for(var i=0;i<obstacles.length;i++){var b=obstacles[i];
+    var cx=Math.max(b.x,Math.min(x,b.x+b.w)),cy=Math.max(b.y,Math.min(y,b.y+b.h));
+    var dx=x-cx,dy=y-cy,d=Math.sqrt(dx*dx+dy*dy);
+    if(d<r){
+      if(d===0){var l=x-b.x,ri=b.x+b.w-x,t=y-b.y,bo=b.y+b.h-y,m=Math.min(l,ri,t,bo);
+        if(m===l)x=b.x-r;else if(m===ri)x=b.x+b.w+r;else if(m===t)y=b.y-r;else y=b.y+b.h+r;}
+      else{x=cx+dx/d*r;y=cy+dy/d*r;}
+    }
+  }
+  return {x:x,y:y};
+}
+function pointInObstacle(x,y){for(var i=0;i<obstacles.length;i++){var b=obstacles[i];if(x>b.x&&x<b.x+b.w&&y>b.y&&y<b.y+b.h)return true;}return false;}
+function addObstacle(x,y,w,h,c){
+  x=Math.max(24,Math.min(MAPW-w-24,x));y=Math.max(24,Math.min(MAPH-h-24,y));
+  if(d2(x+w/2,y+h/2,MAPW/2,MAPH/2)<95*95)return;
+  obstacles.push({x:x,y:y,w:w,h:h,c:c});
+}
+function buildLevelVisuals(){
+  obstacles=[];deco=null;hazards=[];
+  var L=LEVELS[Math.min(level,LEVELS.length)-1];decoType=L.bg;var lo=L.layout;
+  if(lo.type==="crates"){for(var i=0;i<lo.n;i++)addObstacle(rand(60,MAPW-110),rand(60,MAPH-110),rand(26,46),rand(26,46),"#6b5535");}
+  else if(lo.type==="pillars"){for(var i=0;i<lo.n;i++)addObstacle(rand(50,MAPW-90),rand(50,MAPH-90),rand(20,32),rand(42,82),"#7a5a30");}
+  else if(lo.type==="rocks"){for(var i=0;i<lo.n;i++){var rw=rand(30,62),rh=rand(30,62);addObstacle(rand(50,MAPW-rw-50),rand(50,MAPH-rh-50),rw,rh,"#473a5c");}}
+  else if(lo.type==="isles"){for(var i=0;i<lo.n;i++){var a=rand(0,Math.PI*2),d=rand(120,300);addObstacle(MAPW/2+Math.cos(a)*d-22,MAPH/2+Math.sin(a)*d-22,44,44,"#1f4a40");}}
+  else if(lo.type==="reactor"){for(var k=0;k<lo.n;k++){var ang=rand(0,Math.PI*2),dd=rand(150,300);addObstacle(MAPW/2+Math.cos(ang)*dd-15,MAPH/2+Math.sin(ang)*dd-15,30,30,"#7a2030");}}
+  if(decoType==="void"){deco=[];for(var s=0;s<70;s++)deco.push({x:rand(0,MAPW),y:rand(0,MAPH),r:rand(0.5,1.7),t:rand(0,6)});}
+  else if(decoType==="cave"){deco=[];for(var r=0;r<28;r++)deco.push({x:rand(0,MAPW),y:rand(0,MAPH),r:rand(8,24)});}
+  else if(decoType==="industrial"){deco=[];for(var p=0;p<46;p++)deco.push({x:rand(0,MAPW),y:rand(0,MAPH),w:rand(10,30),h:rand(4,10)});}
+  hazardT=2;
+}
+function updateHazards(dt){
+  var L=LEVELS[Math.min(level,LEVELS.length)-1];
+  if(L.haz){
+    hazardT-=dt;
+    if(hazardT<=0&&phase!=="charged"&&phase!=="teleReady"){hazardT=L.haz.rate*rand(0.7,1.3);
+      var a=rand(0,Math.PI*2),d=rand(60,190);
+      hazards.push({x:player.x+Math.cos(a)*d,y:player.y+Math.sin(a)*d,r:L.haz.r,state:"warn",t:0,max:1.0,col:L.haz.color,dmg:L.haz.dmg});
+    }
+  }
+  for(var i=hazards.length-1;i>=0;i--){var hz=hazards[i];hz.t+=dt;
+    if(hz.state==="warn"){if(hz.t>=hz.max){hz.state="active";hz.t=0;addShake(1.5);}}
+    else if(hz.state==="active"){if(hz.t<0.4&&d2(hz.x,hz.y,player.x,player.y)<(hz.r+player.r)*(hz.r+player.r)&&player.inv<=0)hurtPlayer(hz.dmg);
+      if(hz.t>=0.5){hz.state="fade";hz.t=0;}}
+    else{if(hz.t>=0.4)hazards.splice(i,1);}
+  }
+}
+function drawBackground(L){
+  ctx.fillStyle=L?L.tint:"#101018";ctx.fillRect(0,0,W,H);
+  if(decoType==="void"){
+    for(var s=0;s<deco.length;s++){var st=deco[s];var tw=0.4+0.6*Math.abs(Math.sin(gameTime*1.5+st.t));
+      ctx.fillStyle="rgba(180,255,230,"+tw+")";ctx.beginPath();ctx.arc(st.x%W,st.y%H,st.r,0,Math.PI*2);ctx.fill();}
+    var g=ctx.createRadialGradient(W/2,H/2,10,W/2,H/2,160);g.addColorStop(0,"rgba(40,120,90,0.35)");g.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  } else if(decoType==="cave"){
+    for(var r=0;r<deco.length;r++){var rb=deco[r];ctx.fillStyle="rgba(0,0,0,0.35)";ctx.beginPath();ctx.arc(rb.x%W,rb.y%H,rb.r,0,Math.PI*2);ctx.fill();}
+  } else if(decoType==="industrial"){
+    ctx.strokeStyle="rgba(255,180,60,0.06)";ctx.lineWidth=6;
+    for(var p=0;p<deco.length;p++){var db=deco[p];ctx.beginPath();ctx.moveTo(db.x%W,db.y%H);ctx.lineTo((db.x+db.w)%W,(db.y+db.h)%H);ctx.stroke();}
+  } else if(decoType==="core"){
+    var g2=ctx.createRadialGradient(W/2,H/2,8,W/2,H/2,150);g2.addColorStop(0,"rgba(255,60,90,0.35)");g2.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=g2;ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle="rgba(255,90,120,0.10)";ctx.lineWidth=1;
+    for(var gx2=0;gx2<W;gx2+=20){ctx.beginPath();ctx.moveTo(gx2,0);ctx.lineTo(gx2,H);ctx.stroke();}
+    for(var gy2=0;gy2<H;gy2+=20){ctx.beginPath();ctx.moveTo(0,gy2);ctx.lineTo(W,gy2);ctx.stroke();}
+  } else { // grid (outpost)
+    ctx.strokeStyle="rgba(120,160,220,0.08)";ctx.lineWidth=1;
+    for(var gx3=0;gx3<W;gx3+=20){ctx.beginPath();ctx.moveTo(gx3,0);ctx.lineTo(gx3,H);ctx.stroke();}
+    for(var gy3=0;gy3<H;gy3+=20){ctx.beginPath();ctx.moveTo(0,gy3);ctx.lineTo(W,gy3);ctx.stroke();}
+  }
+}
+function drawObstacles(){
+  for(var i=0;i<obstacles.length;i++){var ob=obstacles[i];
+    ctx.fillStyle=ob.c;ctx.fillRect(ob.x,ob.y,ob.w,ob.h);
+    ctx.fillStyle="rgba(255,255,255,0.08)";ctx.fillRect(ob.x,ob.y,ob.w,3);
+    ctx.strokeStyle="rgba(0,0,0,0.55)";ctx.lineWidth=2;ctx.strokeRect(ob.x,ob.y,ob.w,ob.h);
+  }
+}
+function drawHazards(){
+  for(var i=0;i<hazards.length;i++){var hz=hazards[i];
+    if(hz.state==="warn"){var p=hz.t/hz.max;ctx.strokeStyle=hz.col;ctx.globalAlpha=0.9;ctx.lineWidth=2;ctx.beginPath();ctx.arc(hz.x,hz.y,hz.r,0,Math.PI*2);ctx.stroke();
+      ctx.fillStyle=hz.col;ctx.globalAlpha=0.25;ctx.beginPath();ctx.arc(hz.x,hz.y,hz.r*p,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
+    else if(hz.state==="active"){ctx.fillStyle=hz.col;ctx.globalAlpha=0.35+0.35*Math.sin(gameTime*30);ctx.beginPath();ctx.arc(hz.x,hz.y,hz.r,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
+    else{ctx.fillStyle=hz.col;ctx.globalAlpha=Math.max(0,0.4-hz.t);ctx.beginPath();ctx.arc(hz.x,hz.y,hz.r,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
+  }
+}
 
 /* ===================== STATE ===================== */
 var gameState="title"; // title|play|cards|pause|dead|victory
@@ -208,6 +294,7 @@ var phase="explore";   // explore|teleReady|charging|charged
 var player,enemies,bullets,gems,chests,pickups,particles,floaters,pendingCards,pendingKind;
 var shake=0,camX=0,camY=0,usePrompt="",lowHpT=0,hurtFlash=0;
 var combo=0,comboT=0,bestCombo=0,hitStop=0,lvlFlash=0,rage=0,rageActive=false,rageT=0,diff=1,nums=[],orbs=[],lastDanger=0;
+var obstacles=[],hazards=[],hazardT=0,deco=null,decoType="";
 var gameTime,level,kills,score,revives,killsThisLevel,quota,teleporter,charge,chargeTime,spawnTimer,boss;
 var dashCdMax=1.2;
 
@@ -224,6 +311,7 @@ function spawnEnemy(type){
   var ang=rand(0,Math.PI*2),d=rand(150,220);
   var x=player.x+Math.cos(ang)*d,y=player.y+Math.sin(ang)*d;
   x=Math.max(12,Math.min(MAPW-12,x));y=Math.max(12,Math.min(MAPH-12,y));
+  var sr=resolveCircle(x,y,10);x=sr.x;y=sr.y;
   var lm=1+(level-1)*0.45, dm=1+(level-1)*0.30;
   var e={x:x,y:y,dead:false,vx:0,vy:0,hitT:0,shoot:rand(0.5,2),burn:0,slow:0};
   if(type==="grunt"){e.hp=14*lm;e.speed=0.55;e.r=7;e.dmg=8*dm;e.color="#d66";e.score=1;e.contact=true;}
@@ -373,6 +461,7 @@ function updateBullets(dt){
         cur+=diff*0.18;b.vx=Math.cos(cur)*Math.sqrt(b.vx*b.vx+b.vy*b.vy);b.vy=Math.sin(cur)*Math.sqrt(b.vx*b.vx+b.vy*b.vy);}
     }
     b.x+=b.vx; b.y+=b.vy; b.life--;
+    if(!b.line&&pointInObstacle(b.x,b.y)){if(b.explosive)explode(b);bullets.splice(i,1);continue;}
     if(b.life<=0||b.x<0||b.y<0||b.x>MAPW||b.y>MAPH){if(b.explosive)explode(b);bullets.splice(i,1);continue;}
     if(b.enemy){
       if(d2(b.x,b.y,player.x,player.y)<(player.r+b.size)*(player.r+b.size)){
@@ -420,6 +509,7 @@ function updateEnemies(dt){
     var sp=e.speed*(e.slow>0?(e.slow=dt>0?e.slow-dt:e.slow,0.45):1);
     var dx=player.x-e.x,dy=player.y-e.y,d=Math.sqrt(dx*dx+dy*dy)||1;
     e.x+=dx/d*sp;e.y+=dy/d*sp;
+    var er=resolveCircle(e.x,e.y,e.r);e.x=er.x;e.y=er.y;
     if(e.ranged){
       e.shoot-=dt;
       if(e.shoot<=0&&d<220){
@@ -538,6 +628,7 @@ function nextLevel(){
   phase="explore";killsThisLevel=0;quota=10+level*6;teleporter=null;charge=0;boss=null;
   enemies=[];bullets=[];gems=[];chests=[];pickups=[];
   player.x=MAPW/2;player.y=MAPH/2;player.inv=1.5;
+  buildLevelVisuals();
   // scatter chests + enemies
   for(var i=0;i<3+level;i++)chests.push({x:rand(40,MAPW-40),y:rand(40,MAPH-40),kind:"xp",amount:ri(4,9),open:false});
   for(var k=0;k<8+level*2;k++)spawnEnemy(pick(["grunt","fast","tank","shooter",LEVELS[level-1].unique]));
@@ -564,6 +655,7 @@ function startGame(){
   camX=Math.max(0,Math.min(MAPW-W,player.x-W/2));camY=Math.max(0,Math.min(MAPH-H,player.y-H/2));shake=0;lowHpT=0;hurtFlash=0;usePrompt="";
   combo=0;comboT=0;bestCombo=0;hitStop=0;lvlFlash=0;rage=0;rageActive=false;rageT=0;diff=1;nums=[];orbs=[];lastDanger=0;
   killsThisLevel=0;quota=16;teleporter=null;charge=0;chargeTime=40;boss=null;
+  buildLevelVisuals();
   for(var i=0;i<4;i++)chests.push({x:rand(40,MAPW-40),y:rand(40,MAPH-40),kind:"xp",amount:ri(4,9),open:false});
   for(var k=0;k<8;k++)spawnEnemy(pick(["grunt","fast","tank","shooter","charger"]));
 }
@@ -589,6 +681,7 @@ function update(dt){
   else if(md>0){player.x+=mx/md*player.speed*player.moveMul;player.y+=my/md*player.speed*player.moveMul;player.facing=Math.atan2(my,mx);}
   player.x=Math.max(8,Math.min(MAPW-8,player.x));player.y=Math.max(8,Math.min(MAPH-8,player.y));
   if(player.facing===undefined)player.facing=0;
+  var rp=resolveCircle(player.x,player.y,player.r);player.x=Math.max(8,Math.min(MAPW-8,rp.x));player.y=Math.max(8,Math.min(MAPH-8,rp.y));
 
   // spawning waves
   spawnTimer-=dt;
@@ -620,6 +713,7 @@ function update(dt){
   updateGems(dt);
   updateChests();
   updatePickups();
+  updateHazards(dt);
 
   // particles
   for(var p=particles.length-1;p>=0;p--){var pa=particles[p];pa.x+=pa.vx||0;pa.y+=pa.vy||0;pa.life--;if(pa.life<=0)particles.splice(p,1);}
@@ -637,7 +731,7 @@ function update(dt){
 /* ===================== RENDER ===================== */
 function render(){
   var L=LEVELS[Math.min(level,LEVELS.length)-1];
-  ctx.fillStyle=L?L.tint:"#101018";ctx.fillRect(0,0,W,H);
+  drawBackground(L);
   var tcx=Math.max(0,Math.min(MAPW-W,player.x-W/2));
   var tcy=Math.max(0,Math.min(MAPH-H,player.y-H/2));
   camX+=(tcx-camX)*0.15;camY+=(tcy-camY)*0.15;
@@ -648,6 +742,8 @@ function render(){
   for(var gx=Math.floor(camX/32)*32;gx<camX+W;gx+=32){ctx.beginPath();ctx.moveTo(gx,camY);ctx.lineTo(gx,camY+H);ctx.stroke();}
   for(var gy=Math.floor(camY/32)*32;gy<camY+H;gy+=32){ctx.beginPath();ctx.moveTo(camX,gy);ctx.lineTo(camX+W,gy);ctx.stroke();}
   ctx.strokeStyle="rgba(140,140,200,0.3)";ctx.strokeRect(0,0,MAPW,MAPH);
+  drawHazards();
+  drawObstacles();
   // chests
   for(var c=0;c<chests.length;c++){var ch=chests[c];ctx.fillStyle=ch.kind==="weapon"?"#fa3":"#fd6";ctx.fillRect(ch.x-5,ch.y-5,10,10);ctx.strokeStyle="#000";ctx.strokeRect(ch.x-5,ch.y-5,10,10);}
   // pickups (weapon)
@@ -764,7 +860,7 @@ function drawMinimap(){
   dot(player.x,player.y,"#fff",2);
 }
 function drawPause(){ctx.fillStyle="rgba(0,0,0,0.7)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#fff";ctx.font="bold 16px monospace";ctx.fillText("PAUSED",W/2,H/2-30);ctx.font="9px monospace";ctx.fillStyle="#cde";ctx.fillText("tap II / P  →  Resume",W/2,H/2);ctx.fillText("R  →  Restart Run",W/2,H/2+14);ctx.fillText("Q  →  Quit to Title",W/2,H/2+28);}
-function drawTitle(){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#6cf";ctx.font="bold 20px monospace";ctx.fillText("SUPER",W/2,72);ctx.fillStyle="#fc6";ctx.font="bold 20px monospace";ctx.fillText("SHOOTER",W/2,94);ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("auto-aim • move + USE",W/2,124);ctx.fillStyle="#cde";ctx.font="7px monospace";ctx.fillText("find teleporter → charge → boss → next",W/2,142);ctx.fillText("dpad move • DASH • USE opens chests",W/2,154);ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to start",W/2,200);}
+function drawTitle(){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#6cf";ctx.font="bold 20px monospace";ctx.fillText("SUPER",W/2,64);ctx.fillStyle="#fc6";ctx.font="bold 20px monospace";ctx.fillText("SHOOTER",W/2,86);ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("auto-aim • move + USE",W/2,116);ctx.fillStyle="#cde";ctx.font="7px monospace";ctx.fillText("find teleporter → charge → boss → next",W/2,134);ctx.fillText("dpad move • DASH • USE opens chests",W/2,146);ctx.fillStyle="#9cf";ctx.font="7px monospace";ctx.fillText("ZONES: Outpost → Foundry → Caves → Void → Core",W/2,160);ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to start",W/2,200);}
 function drawCards(){
   ctx.fillStyle="rgba(0,0,0,0.78)";ctx.fillRect(0,0,W,H);
   var n=pendingCards.length,cw=74,ch=150,gap=4,x0=5,y0=44;
@@ -788,7 +884,7 @@ function frame(ts){var dt=last?(ts-last)/1000:0.016;last=ts;if(dt>0.05)dt=0.05;
   if(player)render();else{ctx.fillStyle="#000";ctx.fillRect(0,0,W,H);}
   requestAnimationFrame(frame);
 }
-player=newPlayer();enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;level=1;combo=0;comboT=0;bestCombo=0;hitStop=0;lvlFlash=0;rage=0;rageActive=false;rageT=0;diff=1;nums=[];orbs=[];lastDanger=0;
+player=newPlayer();enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;level=1;combo=0;comboT=0;bestCombo=0;hitStop=0;lvlFlash=0;rage=0;rageActive=false;rageT=0;diff=1;nums=[];orbs=[];lastDanger=0;obstacles=[];hazards=[];deco=null;
 requestAnimationFrame(frame);
 })();
 </script>
