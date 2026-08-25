@@ -72,7 +72,7 @@ window.addEventListener("keydown",function(e){
   if(k==="escape"||k==="p")togglePause();
   if(gameState==="pause"){
     if(k==="r")startGame();
-    else if(k==="q")gameState="title";
+    else if(k==="q"){gameState="title";combo=0;comboT=0;rage=0;rageActive=false;nums=[];orbs=[];hitStop=0;lvlFlash=0;}
   }
   if(gameState==="title"&&(k==="enter"||k===" "))startGame();
   if(gameState==="dead"&&(k==="enter"||k===" "))startGame();
@@ -133,7 +133,14 @@ var RARITIES=[
 ];
 function rollRarity(bias){
   var pool=[];
-  RARITIES.forEach(function(r){var w=r.weight+(bias&&r.id==="epic"?20:0)+(bias==="legendary"&&r.id==="legendary"?40:0);for(var i=0;i<w;i++)pool.push(r);});
+  RARITIES.forEach(function(r){
+    var w=r.weight;
+    if(bias==="legendary"&&r.id==="legendary")w+=40;
+    if(bias==="high"&&r.id==="epic")w+=25;
+    if(bias==="high"&&r.id==="legendary")w+=10;
+    if(bias==="low"&&(r.id==="epic"||r.id==="legendary"))w=Math.max(1,w-8);
+    for(var i=0;i<w;i++)pool.push(r);
+  });
   return pick(pool);
 }
 
@@ -200,13 +207,14 @@ var gameState="title"; // title|play|cards|pause|dead|victory
 var phase="explore";   // explore|teleReady|charging|charged
 var player,enemies,bullets,gems,chests,pickups,particles,floaters,pendingCards,pendingKind;
 var shake=0,camX=0,camY=0,usePrompt="",lowHpT=0,hurtFlash=0;
+var combo=0,comboT=0,bestCombo=0,hitStop=0,lvlFlash=0,rage=0,rageActive=false,rageT=0,diff=1,nums=[],orbs=[],lastDanger=0;
 var gameTime,level,kills,score,revives,killsThisLevel,quota,teleporter,charge,chargeTime,spawnTimer,boss;
 var dashCdMax=1.2;
 
 function newPlayer(){
   return {x:MAPW/2,y:MAPH/2,hp:100,maxhp:100,moveMul:1,speed:1.5,r:6,facing:0,
     dashCd:0,dashT:0,inv:0,xp:0,lvl:1,xpNext:6,pickR:26,regen:0,
-    dmgMul:1,cdMul:1,extraPierce:0,extraProj:0,crit:0,armor:0,
+    dmgMul:1,cdMul:1,extraPierce:0,extraProj:0,crit:0,armor:0,rageMul:1,rageCd:1,
     weapon:rollWeapon("common"),dashDir:{x:1,y:0},
     wcd:0,magCur:0,reloading:false,reloadT:0};
 }
@@ -229,6 +237,13 @@ function spawnEnemy(type){
   else if(type==="shielder"){e.hp=60*lm;e.speed=0.3;e.r=12;e.dmg=18*dm;e.color="#8cf";e.score=5;e.contact=true;}
   else if(type==="boss"){var L=LEVELS[level-1];e.hp=700*lm;e.speed=0.32;e.r=22;e.dmg=22*dm;e.color=L.bossColor;e.score=60;e.boss=true;e.ranged=true;e.burst=2;}
   e.maxhp=e.hp;
+  // difficulty + elite rolls (boss excluded)
+  if(!e.boss){
+    e.hp*=diff; e.maxhp=Math.max(e.maxhp,e.hp); e.dmg*=diff; e.speed*=(0.85+0.15*diff);
+    if(Math.random()<Math.min(0.16,0.025+gameTime/700)){
+      e.elite=true;e.hp*=3.4;e.maxhp=e.hp;e.r+=4;e.color="#fd3";e.dmg*=1.4;e.score*=6;e.speed*=1.08;
+    }
+  }
   enemies.push(e);
 }
 
@@ -241,23 +256,44 @@ function nearestEnemy(x,y,maxd){
 /* ===================== DAMAGE ===================== */
 function damageEnemy(e,dmg,hx,hy,fromPlayer){
   if(e.dead)return;
-  if(player.crit>0&&fromPlayer&&Math.random()<player.crit)dmg*=2;
+  var crit=fromPlayer&&player.crit>0&&Math.random()<player.crit;
+  if(crit)dmg*=2;
   e.hp-=dmg;e.hitT=0.08;
   {var kdx=hx-e.x,kdy=hy-e.y,kdd=Math.sqrt(kdx*kdx+kdy*kdy)||1,kb=fromPlayer?2.4:0.6;e.x+=kdx/kdd*kb;e.y+=kdy/kdd*kb;}
+  if(fromPlayer){spawnNum(e.x,e.y-rand(0,6),Math.max(1,Math.round(dmg)),crit);addShake(crit?1.6:0.25);rage=Math.min(100,rage+(crit?3:1.4));}
   if(player.lifestealGlobal&&fromPlayer)player.hp=Math.min(player.maxhp,player.hp+player.lifestealGlobal*dmg);
   if(e.hp<=0){
-    e.dead=true;kills++;score+=e.score;
+    e.dead=true;kills++;
     if(!e.boss)killsThisLevel++;
-    if(fromPlayer)score+=0;
-    for(var i=0;i<5;i++)particles.push({x:e.x,y:e.y,vx:rand(-1,1),vy:rand(-1,1),life:rand(8,16),color:e.color,r:2});
-    if(e.boss){bossDefeated();}
+    var cm=1+Math.floor(combo/5)*0.5;
+    score+=Math.round(e.score*cm);
+    combo++;bestCombo=Math.max(bestCombo,combo);comboT=3.0;
+    if(combo>0&&combo%10===0)player.hp=Math.min(player.maxhp,player.hp+6);
+    if(combo===10||combo===25||combo===50||combo===100)floaters.push({txt:(combo===100?"GODLIKE":combo===50?"UNSTOPPABLE":combo===25?"RAMPAGE":"COMBO x"+combo+"!"),life:70,color:"#fe6"});
+    var pc=e.boss?22:(e.elite?13:5);
+    for(var i=0;i<pc;i++)particles.push({x:e.x,y:e.y,vx:rand(-1.8,1.8),vy:rand(-1.8,1.8),life:rand(8,18),color:e.color,r:e.elite?3:2});
+    if(e.boss){bossDefeated();hitStop=Math.max(hitStop,0.09);addShake(7);floaters.push({txt:"BOSS DOWN",life:90,color:"#fff"});}
     else{
       gems.push({x:e.x,y:e.y,v:Math.max(1,Math.round(e.score/1.5)),life:900,magnet:false});
       if(e.split){spawnEnemyAt(e.x-8,e.y,"fast");spawnEnemyAt(e.x+8,e.y,"fast");}
-      if(Math.random()<0.018&&!e.boss){dropWeapon(e.x,e.y,"low");}
+      if(e.elite){hitStop=Math.max(hitStop,0.06);addShake(4);floaters.push({txt:"ELITE SLAIN",life:80,color:"#fd3"});dropWeapon(e.x,e.y,"high");}
+      else if(Math.random()<0.018){dropWeapon(e.x,e.y,"low");}
+      if(Math.random()<0.08)orbs.push({x:e.x,y:e.y,heal:Math.max(4,Math.round(e.score*1.5)),life:600});
     }
   }
 }
+function spawnNum(x,y,val,crit){nums.push({x:x+rand(-4,4),y:y,v:rand(-14,-24),life:26,val:val,crit:!!crit});}
+function updateNums(dt){
+  for(var i=nums.length-1;i>=0;i--){var n=nums[i];n.y+=n.v;n.v+=0.9;n.life--;if(n.life<=0)nums.splice(i,1);}
+}
+function updateOrbs(dt){
+  for(var i=orbs.length-1;i>=0;i--){var o=orbs[i];o.life--;if(o.life<=0){orbs.splice(i,1);continue;}
+    var d=Math.sqrt(d2(o.x,o.y,player.x,player.y));
+    if(d<player.pickR+10){var dx=player.x-o.x,dy=player.y-o.y,dd=d||1,sp=Math.min(3.6,d*0.25+1);o.x+=dx/dd*sp;o.y+=dy/dd*sp;}
+    if(d<player.r+5){player.hp=Math.min(player.maxhp,player.hp+o.heal);floaters.push({txt:"+"+o.heal,life:40,color:"#6f6"});orbs.splice(i,1);beep(520,0.06,"sine",0.03);}
+  }
+}
+function activateRage(){rageActive=true;rageT=6;player.rageMul=2;player.rageCd=0.6;lvlFlash=0.12;addShake(4);floaters.push({txt:"OVERCHARGE!",life:90,color:"#f6f"});beep(160,0.3,"sawtooth",0.06);}
 function spawnEnemyAt(x,y,type){var before=enemies.length;spawnEnemy(type);if(enemies.length){var e=enemies[enemies.length-1];e.x=x;e.y=y;}}
 
 function dropWeapon(x,y,bias){
@@ -276,7 +312,7 @@ function fireWeapon(dt){
       var a2=base+i*(Math.PI*2/n);
       var ox=p.x+Math.cos(a2)*rad,oy=p.y+Math.sin(a2)*rad;
       for(var j=0;j<enemies.length;j++){var e=enemies[j];if(!e.dead&&d2(ox,oy,e.x,e.y)<(e.r+7)*(e.r+7))
-        damageEnemy(e,w.dmg*p.dmgMul*0.15,ox,oy,true);}
+        damageEnemy(e,w.dmg*p.dmgMul*p.rageMul*0.15,ox,oy,true);}
       particles.push({x:ox,y:oy,life:3,color:"#9ef",r:3});
     }
     return;
@@ -290,13 +326,13 @@ function fireWeapon(dt){
     var ang=Math.atan2(t.y-p.y,t.x-p.x);
     p.facing=ang;
     var shots=w.count+p.extraProj;
-    var dmg=(w.dmg)*p.dmgMul;
+    var dmg=(w.dmg)*p.dmgMul*p.rageMul;
     var pierce=w.pierce+p.extraPierce;
     for(var s=0;s<shots;s++){
       var a=ang+(shots>1?(s-(shots-1)/2)*w.spread:0)+(shots===1?rand(-w.spread,w.spread):0);
       shoot(a,w,dmg,pierce);
     }
-    p.magCur--; p.wcd=Math.max(0.04,w.cd*p.cdMul);
+    p.magCur--;     p.wcd=Math.max(0.04,w.cd*p.cdMul*p.rageCd);
     // muzzle flash + recoil
     particles.push({x:p.x+Math.cos(ang)*9,y:p.y+Math.sin(ang)*9,life:4,color:"#ff8",r:3});
     addShake(0.5);
@@ -421,7 +457,7 @@ function updatePickups(){
 }
 function gainXP(v){
   player.xp+=v;
-  if(player.xp>=player.xpNext){player.xp-=player.xpNext;player.lvl++;player.xpNext=Math.floor(player.xpNext*1.35+4);levelUp();}
+  if(player.xp>=player.xpNext){player.xp-=player.xpNext;player.lvl++;player.xpNext=Math.floor(player.xpNext*1.35+4);lvlFlash=0.22;hitStop=Math.max(hitStop,0.05);floaters.push({txt:"LEVEL UP!",life:70,color:"#fe6"});beep(660,0.16,"square",0.05);levelUp();}
 }
 function openChest(c){
   if(c.kind==="xp"){gainXP(c.amount);floaters.push({txt:"+"+c.amount+" XP",life:60,color:"#4cf"});}
@@ -480,6 +516,11 @@ function bossDefeated(){
 }
 function doInteract(){
   if(gameState!=="play")return;
+  if(!rageActive&&rage>=100){
+    var near=(teleporter&&((phase==="teleReady"||phase==="charged")&&d2(teleporter.x,teleporter.y,player.x,player.y)<40*40));
+    for(var ci=0;ci<chests.length;ci++){if(d2(chests[ci].x,chests[ci].y,player.x,player.y)<20*20)near=true;}
+    if(!near){activateRage();return;}
+  }
   if(phase==="teleReady"&&teleporter&&d2(teleporter.x,teleporter.y,player.x,player.y)<40*40){
     phase="charging";charge=0;spawnEnemy("boss");boss=enemies[enemies.length-1];
     addShake(5);floaters.push({txt:"BOSS INCOMING",life:120,color:"#f33"});beep(120,0.4,"sawtooth",0.06);return;
@@ -521,6 +562,7 @@ function startGame(){
   enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;
   gameTime=0;level=1;kills=0;score=0;revives=1;dashCdMax=1.2;
   camX=Math.max(0,Math.min(MAPW-W,player.x-W/2));camY=Math.max(0,Math.min(MAPH-H,player.y-H/2));shake=0;lowHpT=0;hurtFlash=0;usePrompt="";
+  combo=0;comboT=0;bestCombo=0;hitStop=0;lvlFlash=0;rage=0;rageActive=false;rageT=0;diff=1;nums=[];orbs=[];lastDanger=0;
   killsThisLevel=0;quota=16;teleporter=null;charge=0;chargeTime=40;boss=null;
   for(var i=0;i<4;i++)chests.push({x:rand(40,MAPW-40),y:rand(40,MAPH-40),kind:"xp",amount:ri(4,9),open:false});
   for(var k=0;k<8;k++)spawnEnemy(pick(["grunt","fast","tank","shooter","charger"]));
@@ -528,14 +570,19 @@ function startGame(){
 
 /* ===================== UPDATE ===================== */
 function update(dt){
+  if(hitStop>0){hitStop-=dt;return;}
   gameTime+=dt;
+  diff=1+Math.min(2.4,gameTime/95);
   if(player.regen>0)player.hp=Math.min(player.maxhp,player.hp+player.regen*dt);
   if(player.inv>0)player.inv-=dt;
   if(player.dashCd>0)player.dashCd-=dt;
   player.lifestealGlobal=player.weapon.stats.lifesteal;
   if(shake>0)shake=Math.max(0,shake-dt*42);
   if(hurtFlash>0)hurtFlash-=dt;
+  if(lvlFlash>0)lvlFlash-=dt;
   lowHpT = (player.hp/player.maxhp<0.3)?lowHpT+dt:0;
+  if(comboT>0){comboT-=dt;if(comboT<=0)combo=0;}
+  if(rageActive){rageT-=dt;if(rageT<=0){rageActive=false;player.rageMul=1;player.rageCd=1;rage=0;floaters.push({txt:"OVERCHARGE ENDED",life:50,color:"#9cf"});}}
   // movement
   var mx=(move.r?1:0)-(move.l?1:0),my=(move.d?1:0)-(move.u?1:0),md=Math.sqrt(mx*mx+my*my);
   if(player.dashT>0){player.dashT-=dt;player.x+=player.dashDir.x*5.5;player.y+=player.dashDir.y*5.5;}
@@ -565,6 +612,7 @@ function update(dt){
     else if(phase==="charged"&&d2(teleporter.x,teleporter.y,player.x,player.y)<40*40)usePrompt="USE: Jump to Next Level";
   }
   for(var ci=0;ci<chests.length;ci++){var cc=chests[ci];if(d2(cc.x,cc.y,player.x,player.y)<20*20){usePrompt=cc.kind==="weapon"?"USE: Open Weapon Chest":"USE: Open Chest";}}
+  if(!usePrompt&&rage>=100&&!rageActive)usePrompt="USE: OVERCHARGE";
 
   fireWeapon(dt);
   updateEnemies(dt);
@@ -576,6 +624,10 @@ function update(dt){
   // particles
   for(var p=particles.length-1;p>=0;p--){var pa=particles[p];pa.x+=pa.vx||0;pa.y+=pa.vy||0;pa.life--;if(pa.life<=0)particles.splice(p,1);}
   for(var f=floaters.length-1;f>=0;f--){floaters[f].life--;if(floaters[f].life<=0)floaters.splice(f,1);}
+
+  updateNums(dt);updateOrbs(dt);
+  if(boss&&!boss.dead&&!boss.enraged&&boss.hp/boss.maxhp<0.3){boss.enraged=true;boss.speed*=1.5;boss.fastfire=true;boss.shoot=Math.min(boss.shoot,0.5);boss.dmg*=1.25;floaters.push({txt:"BOSS ENRAGED",life:90,color:"#f33"});addShake(4);}
+  if(gameTime-lastDanger>=42){lastDanger=gameTime;floaters.push({txt:"⚠ DANGER RISING",life:90,color:"#f55"});addShake(2);}
 
   // keep enemy count sane
   if(enemies.length>160)enemies=enemies.filter(function(e){return !e.dead;});
@@ -609,7 +661,10 @@ function render(){
     if(phase==="charging"||phase==="charged"){ctx.fillStyle=ctx.strokeStyle;ctx.font="7px monospace";ctx.textAlign="center";ctx.fillText(Math.floor(charge)+"%",tp.x,tp.y-20);}
   }
   // enemies
-  for(var j=0;j<enemies.length;j++){var e=enemies[j];ctx.fillStyle=e.hitT>0?"#fff":e.color;ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,Math.PI*2);ctx.fill();
+  for(var j=0;j<enemies.length;j++){var e=enemies[j];
+    if(e.enraged){ctx.fillStyle="rgba(255,40,40,0.25)";ctx.beginPath();ctx.arc(e.x,e.y,e.r+6,0,Math.PI*2);ctx.fill();}
+    if(e.elite){ctx.strokeStyle="#fd3";ctx.lineWidth=2;ctx.beginPath();ctx.arc(e.x,e.y,e.r+3,0,Math.PI*2);ctx.stroke();}
+    ctx.fillStyle=e.hitT>0?"#fff":e.color;ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,Math.PI*2);ctx.fill();
     if(e.boss){ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();}}
   // bullets (line hitscan drawn as segment)
   for(var b=0;b<bullets.length;b++){var bl=bullets[b];
@@ -621,6 +676,11 @@ function render(){
   ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,Math.PI*2);ctx.fill();
   ctx.strokeStyle="#6cf";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(player.x,player.y);ctx.lineTo(player.x+Math.cos(player.facing)*11,player.y+Math.sin(player.facing)*11);ctx.stroke();
   if(player.inv>0&&Math.floor(gameTime*20)%2===0){ctx.strokeStyle="rgba(120,200,255,0.8)";ctx.beginPath();ctx.arc(player.x,player.y,player.r+4,0,Math.PI*2);ctx.stroke();}
+  if(rageActive){ctx.strokeStyle="rgba(255,90,255,0.5)";ctx.lineWidth=2;ctx.beginPath();ctx.arc(player.x,player.y,player.r+5,0,Math.PI*2);ctx.stroke();}
+  // heal orbs
+  for(var oi=0;oi<orbs.length;oi++){var ob=orbs[oi];ctx.fillStyle="#3f9";ctx.fillRect(ob.x-3,ob.y-1,6,2);ctx.fillRect(ob.x-1,ob.y-3,2,6);}
+  // damage numbers
+  for(var ni=0;ni<nums.length;ni++){var nm=nums[ni];ctx.globalAlpha=Math.max(0,Math.min(1,nm.life/26));ctx.fillStyle=nm.crit?"#ff3":"#fff";ctx.font=(nm.crit?"bold 11px":"9px")+" monospace";ctx.textAlign="center";ctx.fillText(nm.val,nm.x,nm.y);ctx.globalAlpha=1;}
   ctx.restore();
 
   // floaters
@@ -630,6 +690,7 @@ function render(){
   drawMinimap();
   if(usePrompt){ctx.fillStyle="rgba(0,0,0,0.6)";ctx.fillRect(0,H-26,W,11);ctx.fillStyle="#fe6";ctx.font="bold 8px monospace";ctx.textAlign="center";ctx.fillText(usePrompt,W/2,H-18);}
   if(hurtFlash>0){ctx.fillStyle="rgba(255,0,0,"+(Math.min(0.5,hurtFlash))+")";ctx.fillRect(0,0,W,H);}
+  if(lvlFlash>0){ctx.fillStyle="rgba(255,255,255,"+(Math.min(0.4,lvlFlash))+")";ctx.fillRect(0,0,W,H);}
   if(player.hp/player.maxhp<0.3){var vp=0.25+0.2*Math.sin(gameTime*8)+lowHpT*0.02;ctx.strokeStyle="rgba(255,0,0,"+Math.max(0.2,Math.min(0.6,vp))+")";ctx.lineWidth=12;ctx.strokeRect(6,6,W-12,H-12);}
   if(gameState==="title")drawTitle();
   else if(gameState==="pause")drawPause();
@@ -649,22 +710,43 @@ function drawMinimap(){
   dot(player.x,player.y,"#fff",2);
 }
 function drawPause(){ctx.fillStyle="rgba(0,0,0,0.7)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#fff";ctx.font="bold 16px monospace";ctx.fillText("PAUSED",W/2,H/2-30);ctx.font="9px monospace";ctx.fillStyle="#cde";ctx.fillText("tap II / P  →  Resume",W/2,H/2);ctx.fillText("R  →  Restart Run",W/2,H/2+14);ctx.fillText("Q  →  Quit to Title",W/2,H/2+28);}
-function drawEnd(win){ctx.fillStyle="rgba(0,0,0,0.7)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle=win?"#6f6":"#f66";ctx.font="bold 16px monospace";ctx.fillText(win?"YOU WIN!":"YOU DIED",W/2,H/2-44);ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("Time  "+fmt(gameTime),W/2,H/2-20);ctx.fillText("Level  "+level+" / "+LEVELS.length,W/2,H/2-8);ctx.fillText("Kills  "+kills,W/2,H/2+4);ctx.fillStyle=player.weapon.rar.color;ctx.fillText("Weapon  "+player.weapon.tpl.name,W/2,H/2+16);ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to play again",W/2,H/2+40);}
+function drawEnd(win){
+  ctx.fillStyle="rgba(0,0,0,0.7)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";
+  ctx.fillStyle=win?"#6f6":"#f66";ctx.font="bold 16px monospace";ctx.fillText(win?"YOU WIN!":"YOU DIED",W/2,H/2-50);
+  ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("Time  "+fmt(gameTime),W/2,H/2-26);ctx.fillText("Level  "+level+" / "+LEVELS.length,W/2,H/2-14);ctx.fillText("Kills  "+kills,W/2,H/2-2);
+  var grade = score>6000?"S":score>3500?"A":score>1800?"B":score>700?"C":"D";
+  var gcol = grade==="S"?"#fe6":grade==="A"?"#6f6":grade==="B"?"#6cf":grade==="C"?"#fd6":"#f99";
+  ctx.fillStyle=gcol;ctx.font="bold 13px monospace";ctx.fillText("RANK  "+grade,W/2,H/2+14);
+  ctx.fillStyle=player.weapon.rar.color;ctx.font="8px monospace";ctx.fillText("Weapon  "+player.weapon.tpl.name,W/2,H/2+26);
+  ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("Best Combo  x"+bestCombo,W/2,H/2+38);
+  ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to play again",W/2,H/2+56);
+}
 function drawHUD(){
   ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(0,0,W,18);
-  ctx.fillStyle="#3a3";ctx.fillRect(2,3,70,5);ctx.fillStyle="#6f6";ctx.fillRect(2,3,70*Math.max(0,player.hp/player.maxhp),5);
+  ctx.fillStyle="#3a3";ctx.fillRect(2,3,58,5);ctx.fillStyle="#6f6";ctx.fillRect(2,3,58*Math.max(0,player.hp/player.maxhp),5);
+  ctx.fillStyle="#222";ctx.fillRect(62,3,58,5);
+  var rc=rageActive?"#f6f":(rage>=100?(Math.floor(gameTime*6)%2?"#fe6":"#fc6"):"#6af");
+  ctx.fillStyle=rc;ctx.fillRect(62,3,58*(rageActive?1:rage/100),5);
   ctx.fillStyle="#234";ctx.fillRect(2,10,236,4);ctx.fillStyle="#4cf";ctx.fillRect(2,10,236*Math.min(1,player.xp/player.xpNext),4);
   ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.textAlign="left";ctx.fillText("L"+player.lvl,W-58,8);
   ctx.textAlign="right";ctx.fillText("L"+level,W-2,8);
   ctx.textAlign="left";ctx.fillText("K"+kills,W-44,8);
   // revives
-  ctx.fillStyle="#f66";ctx.textAlign="left";ctx.fillText("♥"+revives,76,8);
+  ctx.fillStyle="#f66";ctx.textAlign="left";ctx.fillText("♥"+revives,122,8);
+  // danger indicator
+  if(diff>1.4){ctx.fillStyle="rgba(255,60,60,"+(0.5+0.5*Math.sin(gameTime*6))+")";ctx.font="bold 7px monospace";ctx.textAlign="right";ctx.fillText("DANGER",W-2,15);}
   // weapon name + rarity + mod stars
   ctx.fillStyle=player.weapon.rar.color;ctx.font="7px monospace";ctx.textAlign="center";
   var stars=player.weapon.mods.length>0?" "+"★".repeat(player.weapon.mods.length):"";
   ctx.fillText(player.weapon.tpl.name+stars,W/2,16);
+  // combo
+  if(combo>1){var cm=1+Math.floor(combo/5)*0.5;
+    ctx.fillStyle="#fe6";ctx.font="bold 9px monospace";ctx.textAlign="center";ctx.fillText("COMBO x"+combo+"  ("+cm.toFixed(1)+"x)",W/2,27);
+    ctx.fillStyle="rgba(255,230,90,0.25)";ctx.fillRect(W/2-40,29,80,2);
+    ctx.fillStyle="#fe6";ctx.fillRect(W/2-40,29,80*Math.max(0,comboT/3),2);
+  }
   // boss bar
-  if(boss&&!boss.dead){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,H-8,W,6);ctx.fillStyle="#f33";ctx.fillRect(0,H-8,W*Math.max(0,boss.hp/boss.maxhp),6);}
+  if(boss&&!boss.dead){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,H-8,W,6);ctx.fillStyle=boss.enraged?"#f63":"#f33";ctx.fillRect(0,H-8,W*Math.max(0,boss.hp/boss.maxhp),6);}
   // charge bar
   if(phase==="charging"||phase==="charged"){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,H-16,W,5);ctx.fillStyle="#6f6";ctx.fillRect(0,H-16,W*(charge/100),5);}
 }
@@ -682,7 +764,6 @@ function drawMinimap(){
   dot(player.x,player.y,"#fff",2);
 }
 function drawPause(){ctx.fillStyle="rgba(0,0,0,0.7)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#fff";ctx.font="bold 16px monospace";ctx.fillText("PAUSED",W/2,H/2-30);ctx.font="9px monospace";ctx.fillStyle="#cde";ctx.fillText("tap II / P  →  Resume",W/2,H/2);ctx.fillText("R  →  Restart Run",W/2,H/2+14);ctx.fillText("Q  →  Quit to Title",W/2,H/2+28);}
-function drawEnd(win){ctx.fillStyle="rgba(0,0,0,0.7)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle=win?"#6f6":"#f66";ctx.font="bold 16px monospace";ctx.fillText(win?"YOU WIN!":"YOU DIED",W/2,H/2-44);ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("Time  "+fmt(gameTime),W/2,H/2-20);ctx.fillText("Level  "+level+" / "+LEVELS.length,W/2,H/2-8);ctx.fillText("Kills  "+kills,W/2,H/2+4);ctx.fillStyle=player.weapon.rar.color;ctx.fillText("Weapon  "+player.weapon.tpl.name,W/2,H/2+16);ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to play again",W/2,H/2+40);}
 function drawTitle(){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#6cf";ctx.font="bold 20px monospace";ctx.fillText("SUPER",W/2,72);ctx.fillStyle="#fc6";ctx.font="bold 20px monospace";ctx.fillText("SHOOTER",W/2,94);ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("auto-aim • move + USE",W/2,124);ctx.fillStyle="#cde";ctx.font="7px monospace";ctx.fillText("find teleporter → charge → boss → next",W/2,142);ctx.fillText("dpad move • DASH • USE opens chests",W/2,154);ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to start",W/2,200);}
 function drawCards(){
   ctx.fillStyle="rgba(0,0,0,0.78)";ctx.fillRect(0,0,W,H);
@@ -707,7 +788,7 @@ function frame(ts){var dt=last?(ts-last)/1000:0.016;last=ts;if(dt>0.05)dt=0.05;
   if(player)render();else{ctx.fillStyle="#000";ctx.fillRect(0,0,W,H);}
   requestAnimationFrame(frame);
 }
-player=newPlayer();enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;level=1;
+player=newPlayer();enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;level=1;combo=0;comboT=0;bestCombo=0;hitStop=0;lvlFlash=0;rage=0;rageActive=false;rageT=0;diff=1;nums=[];orbs=[];lastDanger=0;
 requestAnimationFrame(frame);
 })();
 </script>
