@@ -1,0 +1,653 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=240,initial-scale=1,user-scalable=no">
+<title>Super Shooter</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-user-select:none;user-select:none;touch-action:none;}
+  html,body{width:240px;height:282px;background:#000;overflow:hidden;font-family:monospace;}
+  #wrap{position:relative;width:240px;height:282px;}
+  #gameCanvas{display:block;width:240px;height:282px;background:#07070e;}
+  .btn{position:absolute;display:flex;align-items:center;justify-content:center;
+       background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+       color:#cfe;border-radius:8px;font-size:11px;z-index:5;}
+  #dup,#ddn,#dlf,#drt{width:34px;height:34px;}
+  #dup{left:6px;top:188px;}
+  #ddn{left:6px;top:256px;}
+  #dlf{left:6px;top:222px;}
+  #drt{left:40px;top:222px;}
+  #dash{right:6px;top:200px;width:56px;height:40px;background:rgba(120,200,255,.15);
+        border-color:rgba(120,200,255,.4);color:#bdf;font-weight:bold;font-size:9px;}
+  #use{right:6px;top:150px;width:56px;height:40px;background:rgba(255,210,120,.15);
+       border-color:rgba(255,210,120,.45);color:#fc6;font-weight:bold;font-size:9px;}
+  #pause{right:6px;top:6px;width:30px;height:22px;font-size:9px;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="gameCanvas" width="240" height="282"></canvas>
+  <div id="dup" class="btn">▲</div>
+  <div id="ddn" class="btn">▼</div>
+  <div id="dlf" class="btn">◀</div>
+  <div id="drt" class="btn">▶</div>
+  <div id="dash" class="btn">DASH</div>
+  <div id="use" class="btn">USE</div>
+  <div id="pause" class="btn">II</div>
+</div>
+<script>
+(function(){
+"use strict";
+var W=240,H=282,MAPW=760,MAPH=760;
+var canvas=document.getElementById("gameCanvas");
+var ctx=canvas.getContext("2d");
+
+/* ===================== INPUT ===================== */
+var move={u:false,d:false,l:false,r:false};
+function bindHold(id,prop){
+  var el=document.getElementById(id);
+  function on(e){e.preventDefault();move[prop]=true;}
+  function off(e){e.preventDefault();move[prop]=false;}
+  el.addEventListener("touchstart",on,{passive:false});
+  el.addEventListener("touchend",off,{passive:false});
+  el.addEventListener("touchcancel",off,{passive:false});
+  el.addEventListener("mousedown",on);el.addEventListener("mouseup",off);el.addEventListener("mouseleave",off);
+}
+bindHold("dup","u");bindHold("ddn","d");bindHold("dlf","l");bindHold("drt","r");
+document.getElementById("dash").addEventListener("touchstart",function(e){e.preventDefault();doDash();},{passive:false});
+document.getElementById("dash").addEventListener("mousedown",function(e){e.preventDefault();doDash();});
+document.getElementById("use").addEventListener("touchstart",function(e){e.preventDefault();doInteract();},{passive:false});
+document.getElementById("use").addEventListener("mousedown",function(e){e.preventDefault();doInteract();});
+document.getElementById("pause").addEventListener("touchstart",function(e){e.preventDefault();togglePause();},{passive:false});
+document.getElementById("pause").addEventListener("mousedown",function(e){e.preventDefault();togglePause();});
+
+window.addEventListener("keydown",function(e){
+  var k=e.key.toLowerCase();
+  if(k==="w"||k==="arrowup")move.u=true;
+  if(k==="s"||k==="arrowdown")move.d=true;
+  if(k==="a"||k==="arrowleft")move.l=true;
+  if(k==="d"||k==="arrowright")move.r=true;
+  if(k===" ")doDash();
+  if(k==="e"||k==="enter")doInteract();
+  if(k==="escape"||k==="p")togglePause();
+  if(gameState==="title"&&(k==="enter"||k===" "))startGame();
+  if(gameState==="dead"&&(k==="enter"||k===" "))startGame();
+  if(gameState==="victory"&&(k==="enter"||k===" "))startGame();
+  if(gameState==="cards"&&(k==="1"||k==="2"||k==="3"))chooseCard(parseInt(k)-1);
+});
+window.addEventListener("keyup",function(e){
+  var k=e.key.toLowerCase();
+  if(k==="w"||k==="arrowup")move.u=false;
+  if(k==="s"||k==="arrowdown")move.d=false;
+  if(k==="a"||k==="arrowleft")move.l=false;
+  if(k==="d"||k==="arrowright")move.r=false;
+});
+canvas.addEventListener("click",function(){
+  if(gameState==="title"||gameState==="dead"||gameState==="victory")startGame();
+  else if(gameState==="cards")chooseCard(0);
+});
+window.addEventListener("wheel",function(e){
+  if(gameState==="title"||gameState==="dead"||gameState==="victory")startGame();
+  else if(gameState==="cards")chooseCard(0);
+},{passive:false});
+
+/* ===================== SOUND ===================== */
+var AC=null;
+function actx(){if(AC===null){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){AC=false;}}return AC;}
+function beep(f,d,t,v){var a=actx();if(!a)return;try{var o=a.createOscillator(),g=a.createGain();o.type=t||"square";o.frequency.value=f||440;g.gain.value=v||0.04;o.connect(g);g.connect(a.destination);o.start();g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+(d||0.1));o.stop(a.currentTime+(d||0.1));}catch(e){}}
+
+/* ===================== HELPERS ===================== */
+function rand(a,b){return a+Math.random()*(b-a);}
+function ri(a,b){return Math.floor(rand(a,b+1));}
+function pick(arr){return arr[ri(0,arr.length-1)];}
+function d2(ax,ay,bx,by){var dx=ax-bx,dy=ay-by;return dx*dx+dy*dy;}
+
+/* ===================== WEAPON DEFINITIONS ===================== */
+// behavior: bullet | shotgun | rail | orbit | flame | explosive | homing | beam
+var WEAPONS=[
+  {id:"pistol",name:"Sidearm",behavior:"bullet",dmg:9,cd:0.34,mag:12,reload:1.1,spd:5.0,pierce:0,count:1,spread:0.02,desc:"Reliable sidearm."},
+  {id:"smg",name:"Buzz SMG",behavior:"bullet",dmg:5,cd:0.09,mag:28,reload:1.4,spd:5.5,pierce:0,count:1,spread:0.10,desc:"Spray of fast weak rounds."},
+  {id:"shotgun",name:"Boomstick",behavior:"shotgun",dmg:5,cd:0.7,mag:6,reload:1.6,spd:4.5,pierce:0,count:7,spread:0.42,desc:"Wide close-range burst."},
+  {id:"rifle",name:"Marksman",behavior:"bullet",dmg:20,cd:0.5,mag:10,reload:1.4,spd:7.0,pierce:2,count:1,spread:0.01,desc:"Piercing precise rounds."},
+  {id:"rail",name:"Rail Lance",behavior:"rail",dmg:46,cd:1.1,mag:5,reload:1.7,spd:0,range:340,pierce:99,count:1,spread:0,desc:"Hitscan piercing beam."},
+  {id:"orbiter",name:"Orbit Saws",behavior:"orbit",dmg:6,cd:0,reload:0,mag:99,spd:0,range:0,pierce:0,count:2,spread:0,desc:"Blades orbit you."},
+  {id:"flame",name:"Cinder",behavior:"flame",dmg:3,cd:0.06,mag:60,reload:1.5,spd:3.2,range:60,pierce:0,count:1,spread:0.18,desc:"Short burning cone."},
+  {id:"launcher",name:"Popper",behavior:"explosive",dmg:18,cd:0.9,mag:5,reload:1.8,spd:3.6,range:34,pierce:0,count:1,spread:0.05,desc:"Explosive shells."},
+  {id:"seeker",name:"Hornets",behavior:"homing",dmg:11,cd:0.42,mag:14,reload:1.4,spd:3.8,range:0,pierce:0,count:1,spread:0.05,desc:"Homing missiles."},
+  {id:"sniper",name:"Longshot",behavior:"bullet",dmg:60,cd:1.4,mag:4,reload:1.9,spd:9.0,pierce:3,count:1,spread:0,desc:"Devastating shot."},
+  {id:"minigun",name:"Spinup",behavior:"bullet",dmg:7,cd:0.05,mag:80,reload:2.2,spd:6.0,pierce:1,count:1,spread:0.14,desc:"Sustained fury."},
+  {id:"beam",name:"Arc Rod",behavior:"beam",dmg:4,cd:0.08,mag:50,reload:1.6,spd:0,range:160,pierce:0,count:1,spread:0,desc:"Continuous lightning."}
+];
+
+var RARITIES=[
+  {id:"common",name:"Common",color:"#bbb",mods:0,weight:50},
+  {id:"rare",name:"Rare",color:"#5cf",mods:1,weight:30},
+  {id:"epic",name:"Epic",color:"#c6f",mods:2,weight:14},
+  {id:"legendary",name:"Legendary",color:"#fa3",mods:3,weight:6}
+];
+function rollRarity(bias){
+  var pool=[];
+  RARITIES.forEach(function(r){var w=r.weight+(bias&&r.id==="epic"?20:0)+(bias==="legendary"&&r.id==="legendary"?40:0);for(var i=0;i<w;i++)pool.push(r);});
+  return pick(pool);
+}
+
+// Modifiers (Roboquest-style rolled effects)
+var MODS=[
+  {id:"dmg",name:"Overcharged",apply:function(s){s.dmg=Math.round(s.dmg*1.3);},line:"+30% Damage"},
+  {id:"rof",name:"Rapid",apply:function(s){s.cd*=0.8;},line:"+25% Fire Rate"},
+  {id:"pierce",name:"Puncturing",apply:function(s){s.pierce+=2;},line:"+2 Pierce"},
+  {id:"proj",name:"Split",apply:function(s){s.count+=2;},line:"+2 Projectiles"},
+  {id:"mag",name:"Drum",apply:function(s){s.mag=Math.round(s.mag*1.6);},line:"+60% Magazine"},
+  {id:"crit",name:"Lethal",apply:function(s){s.crit=0.25;},line:"25% Crit (2x)"},
+  {id:"lifesteal",name:"Vampiric",apply:function(s){s.lifesteal+=0.04;},line:"Lifesteal 4%"},
+  {id:"burn",name:"Incendiary",apply:function(s){s.burn=4;},line:"Burn DoT"},
+  {id:"explosive",name:"Volatile",apply:function(s){s.explosive=28;},line:"Explodes on hit"},
+  {id:"homing",name:"Guided",apply:function(s){s.homing=true;},line:"Homing shots"},
+  {id:"chain",name:"Tesla",apply:function(s){s.chain=46;},line:"Chain lightning"},
+  {id:"slow",name:"Frost",apply:function(s){s.slow=0.5;},line:"Slows enemies"},
+  {id:"range",name:"Extended",apply:function(s){if(s.range)s.range*=1.4;s.spd*=1.25;s.life=1.4;},line:"+Range / Speed"}
+];
+
+function rollWeapon(bias){
+  var tpl=pick(WEAPONS);
+  var rar=rollRarity(bias);
+  var s={id:tpl.id,name:tpl.name,behavior:tpl.behavior,
+    dmg:tpl.dmg,cd:tpl.cd,mag:tpl.mag,reload:tpl.reload,spd:tpl.spd,
+    range:tpl.range||0,pierce:tpl.pierce,count:tpl.count,spread:tpl.spread,
+    crit:0,lifesteal:0,burn:0,explosive:0,homing:false,chain:0,slow:0,life:1};
+  var mods=[];
+  var avail=MODS.slice();
+  for(var i=0;i<rar.mods&&avail.length;i++){
+    var idx=ri(0,avail.length-1);var m=avail.splice(idx,1)[0];
+    m.apply(s);mods.push(m);
+  }
+  return {tpl:tpl,rar:rar,stats:s,mods:mods};
+}
+
+/* ===================== UPGRADE POOL (character) ===================== */
+var UPGRADES=[
+  {name:"Vitality",line:"+30 Max HP & heal",apply:function(){player.maxhp+=30;player.hp+=30;}},
+  {name:"Swiftness",line:"+12% Move Speed",apply:function(){player.moveMul*=1.12;}},
+  {name:"Power",line:"+15% Damage",apply:function(){player.dmgMul*=1.15;}},
+  {name:"Fire Rate",line:"+12% Fire Rate",apply:function(){player.cdMul*=0.88;}},
+  {name:"Magnet",line:"+40% Pickup Range",apply:function(){player.pickR*=1.4;}},
+  {name:"Regen",line:"+0.5 HP/sec",apply:function(){player.regen+=0.5;}},
+  {name:"Armor",line:"-15% Contact Dmg",apply:function(){player.armor+=0.15;}},
+  {name:"Pierce+",line:"+1 Projectile Pierce",apply:function(){player.extraPierce+=1;}},
+  {name:"Multishot",line:"+1 Projectile",apply:function(){player.extraProj+=1;}},
+  {name:"Revive",line:"+1 Revive",apply:function(){revives+=1;}},
+  {name:"Crit",line:"+10% Crit (2x)",apply:function(){player.crit+=0.10;}},
+  {name:"Dash Cd",line:"-20% Dash Cd",apply:function(){dashCdMax*=0.8;}}
+];
+
+/* ===================== LEVELS ===================== */
+var LEVELS=[
+  {name:"Outpost",tint:"#2a3a5a",unique:"charger",boss:"The Warden",bossColor:"#f6f"},
+  {name:"Foundry",tint:"#5a3a1a",unique:"splitter",boss:"Forge Tyrant",bossColor:"#fa3"},
+  {name:"Caves",tint:"#3a2a5a",unique:"spitter",boss:"Cave Crawler",bossColor:"#6f6"},
+  {name:"Void",tint:"#1a4a3a",unique:"bomber",boss:"The Devourer",bossColor:"#0f0"},
+  {name:"Core",tint:"#5a1a2a",unique:"shielder",boss:"Overlord",bossColor:"#f33"}
+];
+
+/* ===================== STATE ===================== */
+var gameState="title"; // title|play|cards|pause|dead|victory
+var phase="explore";   // explore|teleReady|charging|charged
+var player,enemies,bullets,gems,chests,pickups,particles,floaters,pendingCards,pendingKind;
+var gameTime,level,kills,score,revives,killsThisLevel,quota,teleporter,charge,chargeTime,spawnTimer,boss;
+var dashCdMax=1.2;
+
+function newPlayer(){
+  return {x:MAPW/2,y:MAPH/2,hp:100,maxhp:100,moveMul:1,speed:1.5,r:6,facing:0,
+    dashCd:0,dashT:0,inv:0,xp:0,lvl:1,xpNext:6,pickR:26,regen:0,
+    dmgMul:1,cdMul:1,extraPierce:0,extraProj:0,crit:0,armor:0,
+    weapon:rollWeapon("common"),dashDir:{x:1,y:0},
+    wcd:0,magCur:0,reloading:false,reloadT:0};
+}
+
+/* ===================== SPAWNING ENEMIES ===================== */
+function spawnEnemy(type){
+  var ang=rand(0,Math.PI*2),d=rand(150,220);
+  var x=player.x+Math.cos(ang)*d,y=player.y+Math.sin(ang)*d;
+  x=Math.max(12,Math.min(MAPW-12,x));y=Math.max(12,Math.min(MAPH-12,y));
+  var lm=1+(level-1)*0.45, dm=1+(level-1)*0.30;
+  var e={x:x,y:y,dead:false,vx:0,vy:0,hitT:0,shoot:rand(0.5,2),burn:0,slow:0};
+  if(type==="grunt"){e.hp=14*lm;e.speed=0.55;e.r=7;e.dmg=8*dm;e.color="#d66";e.score=1;e.contact=true;}
+  else if(type==="fast"){e.hp=9*lm;e.speed=1.05;e.r=6;e.dmg=6*dm;e.color="#fd6";e.score=2;e.contact=true;}
+  else if(type==="tank"){e.hp=46*lm;e.speed=0.36;e.r=11;e.dmg=16*dm;e.color="#a5a";e.score=4;e.contact=true;}
+  else if(type==="shooter"){e.hp=15*lm;e.speed=0.42;e.r=7;e.dmg=0;e.color="#6cf";e.score=3;e.ranged=true;}
+  else if(type==="charger"){e.hp=20*lm;e.speed=1.15;e.r=7;e.dmg=12*dm;e.color="#f9a";e.score=3;e.contact=true;}
+  else if(type==="splitter"){e.hp=18*lm;e.speed=0.5;e.r=8;e.dmg=7*dm;e.color="#9c6";e.score=3;e.contact=true;e.split=true;}
+  else if(type==="spitter"){e.hp=16*lm;e.speed=0.4;e.r=7;e.dmg=0;e.color="#c6f";e.score=3;e.ranged=true;e.fastfire=true;}
+  else if(type==="bomber"){e.hp=13*lm;e.speed=0.7;e.r=8;e.dmg=0;e.color="#f73";e.score=3;e.contact=true;e.bomber=true;}
+  else if(type==="shielder"){e.hp=60*lm;e.speed=0.3;e.r=12;e.dmg=18*dm;e.color="#8cf";e.score=5;e.contact=true;}
+  else if(type==="boss"){var L=LEVELS[level-1];e.hp=700*lm;e.speed=0.32;e.r=22;e.dmg=22*dm;e.color=L.bossColor;e.score=60;e.boss=true;e.ranged=true;e.burst=2;}
+  e.maxhp=e.hp;
+  enemies.push(e);
+}
+
+function nearestEnemy(x,y,maxd){
+  var best=null,bd=maxd*maxd;
+  for(var i=0;i<enemies.length;i++){var e=enemies[i];if(e.dead)continue;var d=d2(x,y,e.x,e.y);if(d<bd){bd=d;best=e;}}
+  return best;
+}
+
+/* ===================== DAMAGE ===================== */
+function damageEnemy(e,dmg,hx,hy,fromPlayer){
+  if(e.dead)return;
+  if(player.crit>0&&fromPlayer&&Math.random()<player.crit)dmg*=2;
+  e.hp-=dmg;e.hitT=0.08;
+  if(player.lifestealGlobal&&fromPlayer)player.hp=Math.min(player.maxhp,player.hp+player.lifestealGlobal*dmg);
+  if(e.hp<=0){
+    e.dead=true;kills++;score+=e.score;
+    if(fromPlayer)score+=0;
+    for(var i=0;i<5;i++)particles.push({x:e.x,y:e.y,vx:rand(-1,1),vy:rand(-1,1),life:rand(8,16),color:e.color,r:2});
+    if(e.boss){bossDefeated();}
+    else{
+      gems.push({x:e.x,y:e.y,v:Math.max(1,Math.round(e.score/1.5)),life:900,magnet:false});
+      if(e.split){spawnEnemyAt(e.x-8,e.y,"fast");spawnEnemyAt(e.x+8,e.y,"fast");}
+      if(Math.random()<0.018&&!e.boss){dropWeapon(e.x,e.y,"low");}
+    }
+  }
+}
+function spawnEnemyAt(x,y,type){var before=enemies.length;spawnEnemy(type);if(enemies.length){var e=enemies[enemies.length-1];e.x=x;e.y=y;}}
+
+function dropWeapon(x,y,bias){
+  pickups.push({x:x,y:y,w:rollWeapon(bias),life:1200});
+}
+
+/* ===================== FIRE WEAPON ===================== */
+function fireWeapon(dt){
+  var w=player.weapon.stats, p=player;
+  if(p.wcd>0)p.wcd-=dt;
+  if(w.behavior==="orbit"){
+    var n=w.count+p.extraProj;
+    var rad=22+level*1.5+n*2;
+    var base=gameTime*3.2;
+    for(var i=0;i<n;i++){
+      var a2=base+i*(Math.PI*2/n);
+      var ox=p.x+Math.cos(a2)*rad,oy=p.y+Math.sin(a2)*rad;
+      for(var j=0;j<enemies.length;j++){var e=enemies[j];if(!e.dead&&d2(ox,oy,e.x,e.y)<(e.r+7)*(e.r+7))
+        damageEnemy(e,w.dmg*p.dmgMul*0.15,ox,oy,true);}
+      particles.push({x:ox,y:oy,life:3,color:"#9ef",r:3});
+    }
+    return;
+  }
+  // ammo weapons
+  if(p.reloading){p.reloadT-=dt;if(p.reloadT<=0){p.magCur=Math.round(w.mag*(1));p.reloading=false;}}
+  if(p.magCur<=0&&!p.reloading){p.reloading=true;p.reloadT=w.reload;return;}
+  if(p.wcd<=0&&!p.reloading){
+    var t=nearestEnemy(p.x,p.y,420);
+    if(!t)return;
+    var ang=Math.atan2(t.y-p.y,t.x-p.x);
+    p.facing=ang;
+    var shots=w.count+p.extraProj;
+    var dmg=(w.dmg)*p.dmgMul;
+    var pierce=w.pierce+p.extraPierce;
+    for(var s=0;s<shots;s++){
+      var a=ang+(shots>1?(s-(shots-1)/2)*w.spread:0)+(shots===1?rand(-w.spread,w.spread):0);
+      shoot(a,w,dmg,pierce);
+    }
+    p.magCur--; p.wcd=Math.max(0.04,w.cd*p.cdMul);
+    beep(620,0.03,"square",0.015);
+  }
+}
+function shoot(a,w,dmg,pierce){
+  var p=player;
+  if(w.behavior==="rail"||w.behavior==="beam"){
+    // hitscan
+    var range=w.range||200;
+    var dx=Math.cos(a),dy=Math.sin(a);
+    var best=null,bd=range*range;
+    for(var i=0;i<enemies.length;i++){var e=enemies[i];if(e.dead)continue;var d=d2(p.x,p.y,e.x,e.y);if(d<bd){bd=d;best=e;}}
+    if(best){
+      damageEnemy(best,dmg,p.x,p.y,true);
+      if(w.behavior==="beam")beep(900,0.03,"sawtooth",0.02);
+    }
+    particles.push({x:p.x+dx*range*0.5,y:p.y+dy*range*0.5,life:4,color:w.behavior==="beam"?"#9ff":"#fff",r:2,line:true,x2:p.x,y2:p.y});
+    return;
+  }
+  bullets.push({x:p.x,y:p.y,vx:Math.cos(a)*w.spd*w.life,vy:Math.sin(a)*w.spd*w.life,dmg:dmg,pierce:pierce,
+    life:w.behavior==="flame"?14:90,enemy:false,color:w.behavior==="flame"?"#f80":(w.behavior==="explosive"?"#fa3":"#ff8"),
+    behavior:w.behavior,explosive:w.explosive,chain:w.chain,slow:w.slow,burn:w.burn,homing:w.homing,
+    size:w.behavior==="launcher"?4:3});
+}
+
+/* ===================== BULLETS ===================== */
+function updateBullets(dt){
+  for(var i=bullets.length-1;i>=0;i--){
+    var b=bullets[i];
+    if(b.line){b.life--;if(b.life<=0)bullets.splice(i,1);continue;}
+    if(b.homing){
+      var t=nearestEnemy(b.x,b.y,200);
+      if(t){var desired=Math.atan2(t.y-b.y,t.x-b.x);var cur=Math.atan2(b.vy,b.vx);
+        var diff=desired-cur;while(diff>Math.PI)diff-=2*Math.PI;while(diff<-Math.PI)diff+=2*Math.PI;
+        cur+=diff*0.18;b.vx=Math.cos(cur)*Math.sqrt(b.vx*b.vx+b.vy*b.vy);b.vy=Math.sin(cur)*Math.sqrt(b.vx*b.vx+b.vy*b.vy);}
+    }
+    b.x+=b.vx; b.y+=b.vy; b.life--;
+    if(b.life<=0||b.x<0||b.y<0||b.x>MAPW||b.y>MAPH){if(b.explosive)explode(b);bullets.splice(i,1);continue;}
+    if(b.enemy){
+      if(d2(b.x,b.y,player.x,player.y)<(player.r+b.size)*(player.r+b.size)){
+        hurtPlayer(b.dmg);bullets.splice(i,1);}
+      continue;
+    }
+    var hit=false;
+    for(var j=0;j<enemies.length;j++){
+      var e=enemies[j];if(e.dead)continue;
+      if(d2(b.x,b.y,e.x,e.y)<(e.r+b.size)*(e.r+b.size)){
+        if(b.burn)e.burn=2.5; if(b.slow)e.slow=1.2;
+        damageEnemy(e,b.dmg,b.x,b.y,true);
+        if(b.chain){var c=nearestEnemy(e.x,e.y,b.chain);if(c)damageEnemy(c,b.dmg*0.6,c.x,c.y,true);}
+        if(b.explosive){explode(b);hit=true;break;}
+        if(b.pierce>0)b.pierce--;else{hit=true;break;}
+      }
+    }
+    if(hit)bullets.splice(i,1);
+  }
+}
+function explode(b){
+  for(var j=0;j<enemies.length;j++){var e=enemies[j];if(e.dead)continue;
+    if(d2(b.x,b.y,e.x,e.y)<(b.explosive+e.r)*(b.explosive+e.r))damageEnemy(e,b.dmg*0.8,b.x,b.y,true);}
+  for(var k=0;k<8;k++)particles.push({x:b.x,y:b.y,vx:rand(-2,2),vy:rand(-2,2),life:14,color:"#fa3",r:3});
+  beep(200,0.12,"sawtooth",0.03);
+}
+function hurtPlayer(dmg){
+  if(player.inv>0)return;
+  dmg*=(1-player.armor);
+  player.hp-=dmg;player.inv=0.5;beep(140,0.12,"sawtooth",0.05);
+  if(player.hp<=0)onDeath();
+}
+function onDeath(){
+  if(revives>0){revives--;player.hp=player.maxhp;player.inv=2.2;
+    floaters.push({txt:"REVIVE!",life:90,color:"#6f6"});
+    for(var i=0;i<enemies.length;i++){var e=enemies[i];if(!e.dead&&d2(e.x,e.y,player.x,player.y)<120*120){e.hp-=40;if(e.hp<=0)e.dead=true;}}
+  }else{player.hp=0;gameState="dead";}
+}
+
+/* ===================== ENEMIES UPDATE ===================== */
+function updateEnemies(dt){
+  for(var i=0;i<enemies.length;i++){
+    var e=enemies[i];if(e.dead)continue;
+    if(e.burn>0){e.burn-=dt;e.hp-=3*dt;if(e.hp<=0){damageEnemy(e,0,e.x,e.y,false);continue;}}
+    var sp=e.speed*(e.slow>0?(e.slow=dt>0?e.slow-dt:e.slow,0.45):1);
+    var dx=player.x-e.x,dy=player.y-e.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+    e.x+=dx/d*sp;e.y+=dy/d*sp;
+    if(e.ranged){
+      e.shoot-=dt;
+      if(e.shoot<=0&&d<220){
+        var a=Math.atan2(dy,dx);
+        bullets.push({x:e.x,y:e.y,vx:Math.cos(a)*2.2,vy:Math.sin(a)*2.2,dmg:(e.boss?12:7),pierce:0,life:140,enemy:true,color:"#6cf",size:3});
+        e.shoot=e.fastfire?0.8:1.7;
+      }
+    }
+    if(e.hitT>0)e.hitT-=dt;
+    if(e.contact&&d<e.r+player.r){
+      if(e.bomber){explodeAt(e.x,e.y,40,16);e.dead=true;continue;}
+      hurtPlayer(e.dmg);
+    }
+  }
+}
+function explodeAt(x,y,r,dmg){for(var j=0;j<enemies.length;j++){var e=enemies[j];if(e.dead)continue;if(d2(x,y,e.x,e.y)<r*r)damageEnemy(e,dmg,x,y,false);}for(var k=0;k<8;k++)particles.push({x:x,y:y,vx:rand(-2,2),vy:rand(-2,2),life:14,color:"#f73",r:3});}
+
+/* ===================== GEMS / CHESTS / PICKUPS ===================== */
+function updateGems(dt){
+  for(var i=gems.length-1;i>=0;i--){var g=gems[i];g.life--;if(g.life<=0){gems.splice(i,1);continue;}
+    var d=Math.sqrt(d2(g.x,g.y,player.x,player.y));
+    if(d<player.pickR)g.magnet=true;
+    if(g.magnet){var dx=player.x-g.x,dy=player.y-g.y,dd=d||1;var sp=Math.min(3.4,d*0.2+1);g.x+=dx/dd*sp;g.y+=dy/dd*sp;}
+    if(d<player.r+4){gainXP(g.v);gems.splice(i,1);beep(880,0.03,"sine",0.02);}
+  }
+}
+function updateChests(){
+  // chests are opened via the USE button (doInteract) when standing on them
+}
+function updatePickups(){
+  for(var i=pickups.length-1;i>=0;i--){var p=pickups[i];p.life--;
+    if(d2(p.x,p.y,player.x,player.y)<(player.r+8)*(player.r+8)){player.weapon=p.w;floaters.push({txt:"GOT "+p.w.tpl.name,life:60,color:p.w.rar.color});pickups.splice(i,1);beep(700,0.1,"square",0.03);}
+    else if(p.life<=0)pickups.splice(i,1);
+  }
+}
+function gainXP(v){
+  player.xp+=v;
+  if(player.xp>=player.xpNext){player.xp-=player.xpNext;player.lvl++;player.xpNext=Math.floor(player.xpNext*1.35+4);levelUp();}
+}
+function openChest(c){
+  if(c.kind==="xp"){gainXP(c.amount);floaters.push({txt:"+"+c.amount+" XP",life:60,color:"#4cf"});}
+  else if(c.kind==="weapon"){openWeaponChest(c.bias);}
+}
+
+/* ===================== LEVEL UP / CARDS ===================== */
+function levelUp(){
+  var pool=UPGRADES.slice(),cards=[];
+  for(var i=0;i<3&&pool.length;i++){var idx=ri(0,pool.length-1);cards.push(pool.splice(idx,1)[0]);}
+  pendingCards=cards.map(function(u){return {title:u.name,color:"#6cf",lines:[u.line],apply:u.apply};});
+  pendingKind="upgrade";
+  gameState="cards";
+  beep(700,0.1,"square",0.04);
+}
+function openWeaponChest(bias){
+  var opts=[];
+  for(var i=0;i<3;i++)opts.push(rollWeapon(bias));
+  pendingCards=opts.map(function(w){
+    var lines=[w.rar.name+" "+w.tpl.name,w.tpl.desc,
+      "DMG "+w.stats.dmg+"  RoF "+(1/w.stats.cd).toFixed(1)+"/s",
+      "MAG "+w.stats.mag+"  RLOAD "+w.stats.reload+"s"];
+    w.stats.mods.forEach(function(m){lines.push("• "+m.line);});
+    return {title:w.tpl.name,color:w.rar.color,lines:lines,apply:function(){player.weapon=w;floaters.push({txt:"EQUIPPED",life:50,color:w.rar.color});}};
+  });
+  pendingKind="weapon";
+  gameState="cards";
+  floaters.push({txt:"WEAPON CHEST",life:80,color:"#fa3"});
+}
+function chooseCard(i){
+  if(gameState!=="cards"||!pendingCards)return;
+  if(i<0||i>=pendingCards.length)return;
+  pendingCards[i].apply();pendingCards=null;gameState="play";
+}
+
+/* ===================== TELEPORTER / BOSS ===================== */
+function spawnTeleporter(){
+  var ang=rand(0,Math.PI*2),d=rand(120,200);
+  teleporter={x:Math.max(40,Math.min(MAPW-40,player.x+Math.cos(ang)*d)),
+              y:Math.max(40,Math.min(MAPH-40,player.y+Math.sin(ang)*d)),active:true};
+  phase="teleReady";
+  floaters.push({txt:"TELEPORTER ONLINE",life:120,color:"#6cf"});
+}
+function bossDefeated(){
+  boss=null;
+  // legendary upgrade
+  var lu=pick(UPGRADES);lu.apply();
+  floaters.push({txt:"LEGENDARY: "+lu.name,life:120,color:"#fa3"});
+  // weapon chest
+  chests.push({x:player.x+rand(-20,20),y:player.y+rand(-20,20),kind:"weapon",bias:"legendary",open:false});
+  // xp burst
+  for(var i=0;i<10;i++)gems.push({x:player.x+rand(-30,30),y:player.y+rand(-30,30),v:8,life:1200,magnet:false});
+}
+function doInteract(){
+  if(gameState!=="play")return;
+  if(phase==="teleReady"&&teleporter&&d2(teleporter.x,teleporter.y,player.x,player.y)<40*40){
+    phase="charging";charge=0;spawnEnemy("boss");boss=enemies[enemies.length-1];
+    floaters.push({txt:"CHARGING...",life:90,color:"#f6f"});beep(300,0.2,"sawtooth",0.04);return;
+  }
+  if(phase==="charged"&&teleporter&&d2(teleporter.x,teleporter.y,player.x,player.y)<40*40){
+    nextLevel();return;
+  }
+  // chests handled in updateChests via nearInteract; this is a fallback
+  for(var i=0;i<chests.length;i++){var c=chests[i];if(!c.open&&d2(c.x,c.y,player.x,player.y)<20*20){openChest(c);chests.splice(i,1);return;}}
+}
+function nearInteract(){return true;} // chests auto-open when overlapping+this true; simplified: open on contact
+function nextLevel(){
+  level++;
+  if(level>LEVELS.length){gameState="victory";return;}
+  phase="explore";killsThisLevel=0;quota=10+level*6;teleporter=null;charge=0;boss=null;
+  enemies=[];bullets=[];gems=[];chests=[];pickups=[];
+  player.x=MAPW/2;player.y=MAPH/2;player.inv=1.5;
+  // scatter chests + enemies
+  for(var i=0;i<3+level;i++)chests.push({x:rand(40,MAPW-40),y:rand(40,MAPH-40),kind:"xp",amount:ri(4,9),open:false});
+  for(var k=0;k<8+level*2;k++)spawnEnemy(pick(["grunt","fast","tank","shooter",LEVELS[level-1].unique]));
+  floaters.push({txt:"LEVEL "+level+": "+LEVELS[level-1].name,life:120,color:"#fff"});
+}
+
+/* ===================== DASH / PAUSE ===================== */
+function doDash(){
+  if(gameState!=="play")return;
+  if(player.dashCd>0)return;
+  var mx=(move.r?1:0)-(move.l?1:0),my=(move.d?1:0)-(move.u?1:0);
+  if(mx===0&&my===0){mx=Math.cos(player.facing);my=Math.sin(player.facing);}
+  var d=Math.sqrt(mx*mx+my*my)||1;player.dashDir={x:mx/d,y:my/d};
+  player.dashT=0.18;player.inv=Math.max(player.inv,0.18);player.dashCd=dashCdMax;beep(500,0.08,"triangle",0.03);
+}
+function togglePause(){if(gameState==="play")gameState="pause";else if(gameState==="pause")gameState="play";}
+
+/* ===================== START / RESET ===================== */
+function startGame(){
+  gameState="play";phase="explore";
+  player=newPlayer();
+  enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;
+  gameTime=0;level=1;kills=0;score=0;revives=1;dashCdMax=1.2;
+  killsThisLevel=0;quota=16;teleporter=null;charge=0;chargeTime=40;boss=null;
+  for(var i=0;i<4;i++)chests.push({x:rand(40,MAPW-40),y:rand(40,MAPH-40),kind:"xp",amount:ri(4,9),open:false});
+  for(var k=0;k<8;k++)spawnEnemy(pick(["grunt","fast","tank","shooter","charger"]));
+}
+
+/* ===================== UPDATE ===================== */
+function update(dt){
+  gameTime+=dt;
+  if(player.regen>0)player.hp=Math.min(player.maxhp,player.hp+player.regen*dt);
+  if(player.inv>0)player.inv-=dt;
+  if(player.dashCd>0)player.dashCd-=dt;
+  player.lifestealGlobal=player.weapon.stats.lifesteal;
+  // movement
+  var mx=(move.r?1:0)-(move.l?1:0),my=(move.d?1:0)-(move.u?1:0),md=Math.sqrt(mx*mx+my*my);
+  if(player.dashT>0){player.dashT-=dt;player.x+=player.dashDir.x*5.5;player.y+=player.dashDir.y*5.5;}
+  else if(md>0){player.x+=mx/md*player.speed*player.moveMul;player.y+=my/md*player.speed*player.moveMul;player.facing=Math.atan2(my,mx);}
+  player.x=Math.max(8,Math.min(MAPW-8,player.x));player.y=Math.max(8,Math.min(MAPH-8,player.y));
+  if(player.facing===undefined)player.facing=0;
+
+  // spawning waves
+  spawnTimer-=dt;
+  if(phase==="explore"){
+    var rate=Math.max(0.3,1.0-gameTime*0.004);
+    if(spawnTimer<=0){spawnTimer=rate;var batch=1+Math.floor(gameTime/30)+level;
+      for(var s=0;s<batch;s++){var t=pick(["grunt","fast",Math.random()<0.3?"tank":"shooter",LEVELS[level-1].unique]);spawnEnemy(t);}
+      killsThisLevel++; // counts spawned toward quota (approximation of waves)
+      if(killsThisLevel>=quota)spawnTeleporter();
+    }
+  } else if(phase==="charging"){
+    charge+=dt/chargeTime*100;
+    if(spawnTimer<=0){spawnTimer=1.4;spawnEnemy(Math.random()<0.5?"fast":"grunt");}
+    if(charge>=100){charge=100;phase="charged";floaters.push({txt:"TELEPORTER READY",life:120,color:"#6f6"});}
+  }
+
+  fireWeapon(dt);
+  updateEnemies(dt);
+  updateBullets(dt);
+  updateGems(dt);
+  updateChests();
+  updatePickups();
+
+  // particles
+  for(var p=particles.length-1;p>=0;p--){var pa=particles[p];pa.x+=pa.vx||0;pa.y+=pa.vy||0;pa.life--;if(pa.life<=0)particles.splice(p,1);}
+  for(var f=floaters.length-1;f>=0;f--){floaters[f].life--;if(floaters[f].life<=0)floaters.splice(f,1);}
+
+  // keep enemy count sane
+  if(enemies.length>160)enemies=enemies.filter(function(e){return !e.dead;});
+  enemies=enemies.filter(function(e){return !e.dead;});
+}
+
+/* ===================== RENDER ===================== */
+function render(){
+  var L=LEVELS[Math.min(level,LEVELS.length)-1];
+  ctx.fillStyle=L?L.tint:"#101018";ctx.fillRect(0,0,W,H);
+  var camx=Math.max(0,Math.min(MAPW-W,player.x-W/2));
+  var camy=Math.max(0,Math.min(MAPH-H,player.y-H/2));
+  ctx.save();ctx.translate(-camx,-camy);
+  // grid
+  ctx.strokeStyle="rgba(255,255,255,0.04)";ctx.lineWidth=1;
+  for(var gx=Math.floor(camx/32)*32;gx<camx+W;gx+=32){ctx.beginPath();ctx.moveTo(gx,camy);ctx.lineTo(gx,camy+H);ctx.stroke();}
+  for(var gy=Math.floor(camy/32)*32;gy<camy+H;gy+=32){ctx.beginPath();ctx.moveTo(camx,gy);ctx.lineTo(camx+W,gy);ctx.stroke();}
+  ctx.strokeStyle="rgba(140,140,200,0.3)";ctx.strokeRect(0,0,MAPW,MAPH);
+  // chests
+  for(var c=0;c<chests.length;c++){var ch=chests[c];ctx.fillStyle=ch.kind==="weapon"?"#fa3":"#fd6";ctx.fillRect(ch.x-5,ch.y-5,10,10);ctx.strokeStyle="#000";ctx.strokeRect(ch.x-5,ch.y-5,10,10);}
+  // pickups (weapon)
+  for(var pk=0;pk<pickups.length;pk++){var pu=pickups[pk];ctx.fillStyle=pu.w.rar.color;ctx.beginPath();ctx.arc(pu.x,pu.y,5,0,Math.PI*2);ctx.fill();}
+  // gems
+  for(var i=0;i<gems.length;i++){var g=gems[i];ctx.fillStyle="#4cf";ctx.fillRect(g.x-2,g.y-2,4,4);}
+  // teleporter
+  if(teleporter){var tp=teleporter;var pulse=0.5+0.5*Math.sin(gameTime*4);
+    ctx.strokeStyle = phase==="charged"?"#6f6":"#6cf";ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(tp.x,tp.y,14+pulse*4,0,Math.PI*2);ctx.stroke();
+    if(phase==="charging"||phase==="charged"){ctx.fillStyle=ctx.strokeStyle;ctx.font="7px monospace";ctx.textAlign="center";ctx.fillText(Math.floor(charge)+"%",tp.x,tp.y-20);}
+  }
+  // enemies
+  for(var j=0;j<enemies.length;j++){var e=enemies[j];ctx.fillStyle=e.hitT>0?"#fff":e.color;ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,Math.PI*2);ctx.fill();
+    if(e.boss){ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();}}
+  // bullets (line hitscan drawn as segment)
+  for(var b=0;b<bullets.length;b++){var bl=bullets[b];
+    if(bl.line){ctx.strokeStyle=bl.color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(bl.x2,bl.y2);ctx.lineTo(bl.x,bl.y);ctx.stroke();}
+    else{ctx.fillStyle=bl.color;ctx.beginPath();ctx.arc(bl.x,bl.y,bl.size,0,Math.PI*2);ctx.fill();}}
+  // particles
+  for(var p=0;p<particles.length;p++){var pt=particles[p];ctx.fillStyle=pt.color||"#fff";ctx.globalAlpha=Math.max(0,Math.min(1,pt.life/16));ctx.fillRect(pt.x-(pt.r||2)/2,pt.y-(pt.r||2)/2,pt.r||2,pt.r||2);ctx.globalAlpha=1;}
+  // player
+  ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle="#6cf";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(player.x,player.y);ctx.lineTo(player.x+Math.cos(player.facing)*11,player.y+Math.sin(player.facing)*11);ctx.stroke();
+  if(player.inv>0&&Math.floor(gameTime*20)%2===0){ctx.strokeStyle="rgba(120,200,255,0.8)";ctx.beginPath();ctx.arc(player.x,player.y,player.r+4,0,Math.PI*2);ctx.stroke();}
+  ctx.restore();
+
+  // floaters
+  for(var f=0;f<floaters.length;f++){var fl=floaters[f];ctx.fillStyle=fl.color||"#fff";ctx.font="bold 11px monospace";ctx.textAlign="center";ctx.globalAlpha=Math.min(1,fl.life/30);ctx.fillText(fl.txt,W/2,46);ctx.globalAlpha=1;}
+
+  drawHUD();
+  if(gameState==="title")drawTitle();
+  else if(gameState==="pause")drawCenter("PAUSED","tap II to resume");
+  else if(gameState==="cards")drawCards();
+  else if(gameState==="dead")drawCenter("YOU DIED","kills "+kills+"  lvl "+player.lvl+"\ntap to start over");
+  else if(gameState==="victory")drawCenter("YOU WIN!","You cleared all "+LEVELS.length+" levels!\ntap to play again");
+}
+function drawHUD(){
+  ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(0,0,W,18);
+  ctx.fillStyle="#3a3";ctx.fillRect(2,3,70,5);ctx.fillStyle="#6f6";ctx.fillRect(2,3,70*Math.max(0,player.hp/player.maxhp),5);
+  ctx.fillStyle="#234";ctx.fillRect(2,10,236,4);ctx.fillStyle="#4cf";ctx.fillRect(2,10,236*Math.min(1,player.xp/player.xpNext),4);
+  ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.textAlign="left";ctx.fillText("L"+player.lvl,W-58,8);
+  ctx.textAlign="right";ctx.fillText("L"+level,W-2,8);
+  ctx.textAlign="left";ctx.fillText("K"+kills,W-44,8);
+  // revives
+  ctx.fillStyle="#f66";ctx.textAlign="left";ctx.fillText("♥"+revives,76,8);
+  // weapon name
+  ctx.fillStyle="#cde";ctx.font="7px monospace";ctx.textAlign="left";ctx.fillText(player.weapon.tpl.name,W/2-30,16);
+  // boss bar
+  if(boss&&!boss.dead){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,H-8,W,6);ctx.fillStyle="#f33";ctx.fillRect(0,H-8,W*Math.max(0,boss.hp/boss.maxhp),6);}
+  // charge bar
+  if(phase==="charging"||phase==="charged"){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,H-16,W,5);ctx.fillStyle="#6f6";ctx.fillRect(0,H-16,W*(charge/100),5);}
+}
+function fmt(t){var m=Math.floor(t/60),s=Math.floor(t%60);return m+":"+(s<10?"0":"")+s;}
+function drawCenter(title,sub){ctx.fillStyle="rgba(0,0,0,0.6)";ctx.fillRect(0,0,W,H);ctx.fillStyle="#fff";ctx.textAlign="center";ctx.font="bold 15px monospace";ctx.fillText(title,W/2,H/2-10);ctx.font="9px monospace";ctx.fillStyle="#cde";var lines=sub.split("\n");for(var i=0;i<lines.length;i++)ctx.fillText(lines[i],W/2,H/2+10+i*12);}
+function drawTitle(){ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(0,0,W,H);ctx.textAlign="center";ctx.fillStyle="#6cf";ctx.font="bold 20px monospace";ctx.fillText("SUPER",W/2,72);ctx.fillStyle="#fc6";ctx.font="bold 20px monospace";ctx.fillText("SHOOTER",W/2,94);ctx.fillStyle="#fff";ctx.font="8px monospace";ctx.fillText("auto-aim • move + USE",W/2,124);ctx.fillStyle="#cde";ctx.font="7px monospace";ctx.fillText("find teleporter → charge → boss → next",W/2,142);ctx.fillText("dpad move • DASH • USE opens chests",W/2,154);ctx.fillStyle="#6f6";ctx.font="bold 10px monospace";ctx.fillText("tap to start",W/2,200);}
+function drawCards(){
+  ctx.fillStyle="rgba(0,0,0,0.78)";ctx.fillRect(0,0,W,H);
+  var n=pendingCards.length,cw=74,ch=150,gap=4,x0=5,y0=44;
+  ctx.fillStyle="#fff";ctx.textAlign="center";ctx.font="bold 11px monospace";ctx.fillText(pendingKind==="weapon"?"WEAPON CHEST":"CHOOSE UPGRADE",W/2,30);
+  for(var i=0;i<n;i++){
+    var cx=x0+i*(cw+gap),c=pendingCards[i];
+    ctx.fillStyle="rgba(40,50,80,0.5)";ctx.fillRect(cx,y0,cw,ch);
+    ctx.strokeStyle=c.color;ctx.lineWidth=2;ctx.strokeRect(cx,y0,cw,ch);
+    ctx.fillStyle=c.color;ctx.font="bold 8px monospace";wrapText(c.title,cx+cw/2,y0+12,cw-6,9);
+    ctx.fillStyle="#cde";ctx.font="7px monospace";
+    var ly=y0+26;for(var k=0;k<c.lines.length;k++){wrapText(c.lines[k],cx+cw/2,ly,cw-6,8);ly+=10;}
+    ctx.fillStyle=c.color;ctx.font="7px monospace";ctx.fillText("["+(i+1)+"]",cx+cw/2,y0+ch-6);
+  }
+}
+function wrapText(text,cx,y,maxw,lh){var words=(""+text).split(" "),line="",yy=y;for(var i=0;i<words.length;i++){var t=line?line+" "+words[i]:words[i];if(ctx.measureText(t).width>maxw){ctx.fillText(line,cx,yy);line=words[i];yy+=lh;}else line=t;}ctx.fillText(line,cx,yy);}
+
+/* ===================== LOOP ===================== */
+var last=0;
+function frame(ts){var dt=last?(ts-last)/1000:0.016;last=ts;if(dt>0.05)dt=0.05;
+  if(gameState==="play")update(dt);
+  if(player)render();else{ctx.fillStyle="#000";ctx.fillRect(0,0,W,H);}
+  requestAnimationFrame(frame);
+}
+player=newPlayer();enemies=[];bullets=[];gems=[];chests=[];pickups=[];particles=[];floaters=[];pendingCards=null;level=1;
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
